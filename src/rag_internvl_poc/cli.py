@@ -44,6 +44,7 @@ def init_db_cmd(
 def ingest(
     pdf_dir: Path = typer.Option(Path("data/pdfs"), exists=True, file_okay=False, help="Dossier contenant les PDF"),
     images_dir: Path = typer.Option(Path("data/images"), help="Dossier de sortie pour les images de pages"),
+    images_input_dir: Optional[Path] = typer.Option(None, exists=True, file_okay=False, help="Dossier d'images (png/jpg) à ingérer via OCR"),
     max_chars: int = typer.Option(1500, help="Taille max (caractères) d'un chunk"),
     overlap: int = typer.Option(200, help="Chevauchement entre chunks (caractères)"),
     image_dpi: int = typer.Option(150, help="Résolution de rendu des pages en PNG"),
@@ -54,6 +55,7 @@ def ingest(
     cfg = IngestConfig(
         pdf_dir=pdf_dir,
         images_dir=images_dir,
+        images_input_dir=images_input_dir,
         max_chars=max_chars,
         overlap=overlap,
         image_dpi=image_dpi,
@@ -68,9 +70,25 @@ def query(
     top_k: int = typer.Option(4, help="Nombre de contextes à récupérer"),
     alpha: float = typer.Option(0.5, min=0.0, max=1.0, help="Poids dense vs FTS (0..1)"),
     run_model: bool = typer.Option(False, help="Tenter l'inférence InternVL (GPU requis)"),
+    model_id: str = typer.Option("OpenGVLab/InternVL3_5-2B", help="ID du modèle multimodal (HF)"),
+    device: str = typer.Option("cuda", help="Dispositif modèle: cuda|mps|cpu"),
+    dtype: str = typer.Option("bfloat16", help="DType: bfloat16|float16|float32 (selon device)"),
+    max_new_tokens: int = typer.Option(512, help="Limite de tokens générés"),
+    temperature: float = typer.Option(0.2, help="Température d'échantillonnage"),
     dsn: Optional[str] = typer.Option(None, help="DSN Postgres, sinon lu depuis DATABASE_URL"),
 ):
     """Recherche hybride et, optionnellement, génération via InternVL."""
-    out = answer_question(get_dsn(dsn), question, top_k=top_k, alpha=alpha, run_model=run_model)
+    out = answer_question(
+        get_dsn(dsn),
+        question,
+        top_k=top_k,
+        alpha=alpha,
+        run_model=run_model,
+        model_id=model_id,
+        device=device,
+        dtype=dtype,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+    )
     typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
 

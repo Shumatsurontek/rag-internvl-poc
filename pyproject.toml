@@ -22,6 +22,8 @@ dependencies = [
   "typer>=0.12.3",
   "einops>=0.8.0",
   "timm>=0.9.16",
+  "pytesseract>=0.3.13",
+  "torchvision>=0.18.0",
 ]
 
 [project.scripts]

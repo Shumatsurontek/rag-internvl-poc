@@ -59,13 +59,13 @@ Embeddings
 - La table utilise `vector(1024)`. Si vous changez de modèle d’embedding, adaptez la dimension.
 
 Modèle InternVL3.5-8B
-- Référence : https://huggingface.co/OpenGVLab/InternVL3_5-8B
+- Référence : https://huggingface.co/OpenGVLab/InternVL3_5-2B
 - Version transformers minimale : >= 4.52.1 (d’après la page du modèle)
 - Chargement type :
 
   ```python path=null start=null
   from transformers import AutoTokenizer, AutoModel
-  model_id = "OpenGVLab/InternVL3_5-8B"
+  model_id = "OpenGVLab/InternVL3_5-2B"
   tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
   model = AutoModel.from_pretrained(
       model_id,

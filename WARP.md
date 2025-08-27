@@ -72,7 +72,7 @@ Architecture (high-level)
 
 - Generation (optional) (src/rag_internvl_poc/model_internvl.py)
   - Builds a French system prompt and concatenates retrieved contexts.
-  - If --run-model: loads OpenGVLab/InternVL3_5-8B via Transformers with trust_remote_code, attempts model.chat(...). Falls back to a generic generate(...) path if chat is unavailable.
+  - If --run-model: loadsOpenGVLab/InternVL3_5-2B via Transformers with trust_remote_code, attempts model.chat(...). Falls back to a generic generate(...) path if chat is unavailable.
   - Supplies retrieved page images to the model when available.
   - If not running the model, returns a dry-run structure with the prompt and image list.
 

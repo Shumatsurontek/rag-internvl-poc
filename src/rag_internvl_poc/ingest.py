@@ -5,12 +5,14 @@ import time
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Tuple, Optional
 
 import fitz  # PyMuPDF
 import numpy as np
 import psycopg
 from tqdm import tqdm
+import pytesseract
+from PIL import Image
 
 from .embeddings import EmbeddingModel
 
@@ -53,6 +55,7 @@ class IngestConfig:
     overlap: int = 200
     image_dpi: int = 150
     embed_model_id: str = "BAAI/bge-m3"
+    images_input_dir: Optional[Path] = None
 
 
 def ingest_pdfs(dsn: str, cfg: IngestConfig) -> None:
@@ -63,7 +66,6 @@ def ingest_pdfs(dsn: str, cfg: IngestConfig) -> None:
     pdf_paths = sorted([p for p in cfg.pdf_dir.glob("**/*.pdf") if p.is_file()])
     if not pdf_paths:
         logger.warning("[ingest] aucun PDF trouvé dans %s", cfg.pdf_dir)
-        return
 
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
@@ -119,6 +121,48 @@ def ingest_pdfs(dsn: str, cfg: IngestConfig) -> None:
                     (time.perf_counter() - t_db) * 1000,
                     (time.perf_counter() - t_doc) * 1000,
                 )
+
+            # Ingestion d'images standalone via OCR si dossier fourni
+            if cfg.images_input_dir and cfg.images_input_dir.exists():
+                image_files = sorted([p for p in cfg.images_input_dir.glob("**/*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
+                for img_path in image_files:
+                    t_img = time.perf_counter()
+                    try:
+                        pil_img = Image.open(img_path).convert("RGB")
+                    except Exception:
+                        continue
+                    text = pytesseract.image_to_string(pil_img, lang="fra+eng")
+                    chunks = _chunk_text(text, cfg.max_chars, cfg.overlap) or [""]
+                    rows: List[Tuple[str, int, int, str, str, str]] = []
+                    texts: List[str] = []
+                    doc_id = str(img_path.resolve())
+                    page_num = 0
+                    for ci, chunk in enumerate(chunks):
+                        rows.append((doc_id, page_num, ci, chunk, str(img_path), None))
+                        texts.append(chunk)
+                    if not rows:
+                        continue
+                    t_emb = time.perf_counter()
+                    embs = embed.encode(texts)
+                    logger.debug("[ingest-img] embeddings: N=%d dim=%d in %.1f ms", len(texts), embs.shape[1], (time.perf_counter() - t_emb) * 1000)
+                    insert_sql = (
+                        "INSERT INTO chunks (doc_id, page_num, chunk_index, content, image_path, embedding) "
+                        "VALUES (%s, %s, %s, %s, %s, %s)"
+                    )
+                    def to_vector_literal(v: np.ndarray) -> str:
+                        return "[" + ",".join(str(float(x)) for x in v.tolist()) + "]"
+                    batch: List[Tuple[str, int, int, str, str, str]] = []
+                    for (_doc, _pg, ci, chunk, image_path, _), vec in zip(rows, embs):
+                        batch.append((doc_id, page_num, ci, chunk, image_path, to_vector_literal(vec)))
+                    t_db = time.perf_counter()
+                    cur.executemany(insert_sql, batch)
+                    conn.commit()
+                    logger.info(
+                        "[ingest-img] inserted rows=%d for %s in %.1f ms",
+                        len(batch),
+                        img_path.name,
+                        (time.perf_counter() - t_img) * 1000,
+                    )
 
     # Analyse pour l'index ivfflat
     with psycopg.connect(dsn) as conn:
