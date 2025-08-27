@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.DS_Store
+
+.venv/
+.uv/
+uv.lock
+
+.env
+
+# Data and artifacts
+/data/images/
+/data/pdfs/
+/data/*
+!data/.gitkeep
+!data/images/.gitkeep
+!data/pdfs/.gitkeep
+
+# Reports / cache
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
