@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
+import time
 import os
 from dataclasses import dataclass
 from typing import List, Optional
 
 from PIL import Image
 
+logger = logging.getLogger(__name__)
 
 PROMPT_SYSTEM = (
     "Tu es un assistant qui répond de manière concise et factuelle en français en t'appuyant uniquement sur les extraits et images fournis en contexte. "
@@ -42,7 +45,18 @@ class InternVL:
         import torch
         from transformers import AutoTokenizer, AutoModel
 
+        # Auto-pick device if unset
+        try:
+            if self.device == "cuda" and not torch.cuda.is_available():
+                if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                    self.device = "mps"
+                else:
+                    self.device = "cpu"
+        except Exception:
+            self.device = "cpu"
+
         dtype = torch.bfloat16 if self.dtype == "bfloat16" else torch.float16
+        t0 = time.perf_counter()
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, trust_remote_code=self.trust_remote_code)
         self.model = AutoModel.from_pretrained(
             self.model_id,
@@ -51,6 +65,7 @@ class InternVL:
             use_flash_attn=True,
             trust_remote_code=self.trust_remote_code,
         ).eval().to(self.device)
+        logger.info("[internvl] loaded %s on device=%s in %.1f s", self.model_id, self.device, (time.perf_counter() - t0))
         self._loaded = True
 
     def generate(
@@ -90,6 +105,7 @@ class InternVL:
         try:
             # De nombreux modèles InternVL exposent une méthode `chat` via trust_remote_code
             if hasattr(self.model, "chat"):
+                t1 = time.perf_counter()
                 out = self.model.chat(
                     self.tokenizer,
                     prompt,
@@ -98,14 +114,17 @@ class InternVL:
                     max_new_tokens=max_new_tokens,
                 )
                 text = out if isinstance(out, str) else str(out)
+                logger.info("[internvl] chat done tokens<=%d images=%d in %.1f s", max_new_tokens, len(images), (time.perf_counter() - t1))
             else:
                 # Fallback très générique: concatène description d'images et prompt
                 # Note: ceci ne reflète pas le vrai passage d'images si le modèle n'expose pas de pipeline adapté.
                 full_prompt = PROMPT_SYSTEM + "\n\n" + prompt
                 inputs = self.tokenizer(full_prompt, return_tensors="pt").to(self.device)
+                t2 = time.perf_counter()
                 with torch.no_grad():
                     output = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=temperature > 0, temperature=temperature)
                 text = self.tokenizer.decode(output[0], skip_special_tokens=True)
+                logger.info("[internvl] generate done tokens<=%d images=%d in %.1f s", max_new_tokens, len(images), (time.perf_counter() - t2))
         except Exception as e:
             text = f"[Erreur d'inférence: {e}]"
 

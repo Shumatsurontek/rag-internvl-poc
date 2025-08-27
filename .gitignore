@@ -25,3 +25,5 @@ uv.lock
 # Jupyter
 .ipynb_checkpoints/
 
+# HF
+.hf-home/

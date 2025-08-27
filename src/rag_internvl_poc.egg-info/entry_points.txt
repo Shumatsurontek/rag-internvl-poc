@@ -1,0 +1,2 @@
+[console_scripts]
+rag-internvl = rag_internvl_poc.cli:app

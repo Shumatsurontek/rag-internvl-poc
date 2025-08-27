@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +13,8 @@ import psycopg
 from tqdm import tqdm
 
 from .embeddings import EmbeddingModel
+
+logger = logging.getLogger(__name__)
 
 
 def _chunk_text(text: str, max_chars: int = 1500, overlap: int = 200) -> List[str]:
@@ -52,19 +56,22 @@ class IngestConfig:
 
 
 def ingest_pdfs(dsn: str, cfg: IngestConfig) -> None:
-    embed = EmbeddingModel(model_id=cfg.embed_model_id, device=_pick_device())
+    device = _pick_device()
+    logger.info("[ingest] start: pdf_dir=%s images_dir=%s device=%s model=%s", cfg.pdf_dir, cfg.images_dir, device, cfg.embed_model_id)
+    embed = EmbeddingModel(model_id=cfg.embed_model_id, device=device)
 
     pdf_paths = sorted([p for p in cfg.pdf_dir.glob("**/*.pdf") if p.is_file()])
     if not pdf_paths:
-        print(f"Aucun PDF trouvé dans {cfg.pdf_dir}")
+        logger.warning("[ingest] aucun PDF trouvé dans %s", cfg.pdf_dir)
         return
 
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             for pdf_path in pdf_paths:
+                t_doc = time.perf_counter()
                 doc = fitz.open(pdf_path)
                 doc_id = str(pdf_path.resolve())
-                print(f"Ingestion: {pdf_path} ({doc.page_count} pages)")
+                logger.info("[ingest] %s pages=%d", pdf_path, doc.page_count)
                 rows: List[Tuple[str, int, int, str, str, str]] = []
                 # On stocke d'abord les contenus, puis on calculera l'embedding en batch
                 texts: List[str] = []
@@ -83,7 +90,9 @@ def ingest_pdfs(dsn: str, cfg: IngestConfig) -> None:
                     continue
 
                 # Embeddings en batch
+                t_emb = time.perf_counter()
                 embs = embed.encode(texts)  # (N, D) float32 normalisés
+                logger.debug("[ingest] embeddings: N=%d dim=%d in %.1f ms", len(texts), embs.shape[1], (time.perf_counter() - t_emb) * 1000)
 
                 # Insertion en DB
                 insert_sql = (
@@ -99,14 +108,24 @@ def ingest_pdfs(dsn: str, cfg: IngestConfig) -> None:
                 for (doc_id, page_num, ci, chunk, image_path, _), vec in zip(rows, embs):
                     batch.append((doc_id, page_num, ci, chunk, image_path, to_vector_literal(vec)))
 
-                psycopg.extras.execute_batch(cur, insert_sql, batch, page_size=500)
+                # psycopg3: use executemany (execute_batch is psycopg2-specific)
+                t_db = time.perf_counter()
+                cur.executemany(insert_sql, batch)
                 conn.commit()
+                logger.info(
+                    "[ingest] inserted rows=%d for %s in %.1f ms (total %.1f ms)",
+                    len(batch),
+                    pdf_path.name,
+                    (time.perf_counter() - t_db) * 1000,
+                    (time.perf_counter() - t_doc) * 1000,
+                )
 
     # Analyse pour l'index ivfflat
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("ANALYZE chunks;")
         conn.commit()
+    logger.info("[ingest] done")
 
 
 def _pick_device() -> str:

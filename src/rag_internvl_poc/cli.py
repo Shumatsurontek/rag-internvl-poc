@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -11,6 +12,23 @@ from .ingest import IngestConfig, ingest_pdfs
 from .rag import answer_question
 
 app = typer.Typer(add_completion=False, help="RAG POC avec InternVL3.5-8B, Postgres pgvector + FTS")
+
+
+@app.callback()
+def _configure(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Affiche des logs détaillés (DEBUG) sur la pipeline RAG",
+    )
+):
+    """Configure le logging global avant chaque commande."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
 
 
 @app.command()

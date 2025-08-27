@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from typing import List, Tuple
 
 import psycopg
 
 from .embeddings import EmbeddingModel
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -25,26 +29,43 @@ def hybrid_search(dsn: str, question: str, cfg: RetrievalConfig) -> List[dict]:
     dense_score = 1 - cosine_distance
     fts_score = ts_rank_cd(...)
     """
+    t0 = time.perf_counter()
     embed = EmbeddingModel()
     q_vec = embed.encode([question])[0]
     q_vec_lit = _to_vector_literal(q_vec)
+    logger.debug("[retrieve] query embedding dim=%d in %.1f ms", len(q_vec), (time.perf_counter() - t0) * 1000)
 
     sql = (
         "SELECT id, doc_id, page_num, chunk_index, content, image_path, "
-        "       (1 - (embedding <=> $2::vector)) AS dense_score, "
-        "       ts_rank_cd(content_tsv, plainto_tsquery('french', $1)) AS fts_score, "
-        "       ($3 * (1 - (embedding <=> $2::vector)) + (1 - $3) * "
-        "        ts_rank_cd(content_tsv, plainto_tsquery('french', $1))) AS hybrid_score "
+        "       (1 - (embedding <=> %s::vector)) AS dense_score, "
+        "       ts_rank_cd(content_tsv, plainto_tsquery('french', %s)) AS fts_score, "
+        "       (%s * (1 - (embedding <=> %s::vector)) + (1 - %s) * "
+        "        ts_rank_cd(content_tsv, plainto_tsquery('french', %s))) AS hybrid_score "
         "FROM chunks "
         "ORDER BY hybrid_score DESC "
-        "LIMIT $4"
+        "LIMIT %s"
     )
 
     results: List[dict] = []
+    t1 = time.perf_counter()
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (question, q_vec_lit, cfg.alpha, cfg.top_k))
-            for row in cur.fetchall():
+            # psycopg3 uses %s placeholders; order must match the SQL above
+            # Order: q_vec_lit (vector), question (fts), alpha, q_vec_lit (vector), alpha, question (fts), top_k
+            cur.execute(
+                sql,
+                (
+                    q_vec_lit,
+                    question,
+                    cfg.alpha,
+                    q_vec_lit,
+                    cfg.alpha,
+                    question,
+                    cfg.top_k,
+                ),
+            )
+            rows = cur.fetchall()
+            for row in rows:
                 (rid, doc_id, page_num, chunk_index, content, image_path, dense, fts, hybrid) = row
                 results.append(
                     {
@@ -59,5 +80,12 @@ def hybrid_search(dsn: str, question: str, cfg: RetrievalConfig) -> List[dict]:
                         "hybrid_score": float(hybrid if hybrid is not None else 0.0),
                     }
                 )
+    logger.debug(
+        "[retrieve] db search top_k=%d alpha=%.2f -> %d rows in %.1f ms",
+        cfg.top_k,
+        cfg.alpha,
+        len(results),
+        (time.perf_counter() - t1) * 1000,
+    )
     return results
 
